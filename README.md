@@ -1,2 +1,1 @@
-# mq-test-tmp
-Temporary test repository, will be deleted
+test1

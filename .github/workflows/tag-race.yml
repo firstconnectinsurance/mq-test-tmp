@@ -1,0 +1,42 @@
+name: tag-race
+
+on:
+  push:
+    branches: ['s-G3c']
+
+permissions:
+  contents: write
+
+concurrency:
+  group: trunk-deploy-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  tag:
+    name: tag
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Simulate a slow job for the first merged PR and fast ones for the rest
+        run: |
+          msg=$(git log -1 --format=%s)
+          echo "push sha=$GITHUB_SHA msg=$msg"
+          case "$msg" in *-t1) echo slow; sleep 75;; *) echo fast; sleep 5;; esac
+
+      - name: Naive tag (last writer wins)
+        run: |
+          git tag -f prod-naive-G3c "$GITHUB_SHA"
+          git push -f origin prod-naive-G3c
+
+      - name: Guarded tag (never moves backwards)
+        run: |
+          git fetch -q origin "+refs/tags/prod-guarded-G3c:refs/tags/prod-guarded-G3c" 2>/dev/null || true
+          if git rev-parse -q --verify refs/tags/prod-guarded-G3c >/dev/null && ! git merge-base --is-ancestor refs/tags/prod-guarded-G3c "$GITHUB_SHA"; then
+            echo "skip: tag would move backwards"
+          else
+            git tag -f prod-guarded-G3c "$GITHUB_SHA"
+            git push -f origin prod-guarded-G3c
+          fi

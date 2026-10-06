@@ -1,0 +1,7 @@
+# yaml-language-server: $schema=https://coderabbit.ai/integrations/schema.v2.json
+
+# Throwaway merge queue test repo. No `inheritance: true`, so the org's central config is not applied.
+# Automatic CodeRabbit reviews are switched off here.
+reviews:
+  auto_review:
+    enabled: false

@@ -1,0 +1,18 @@
+name: tag-sim
+
+on:
+  push:
+    branches: ['s-*']
+
+permissions:
+  contents: read
+
+jobs:
+  tag:
+    name: tag
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: |
+          echo "push sha=$GITHUB_SHA tree=$(git rev-parse 'HEAD^{tree}') msg=$(git log -1 --format=%s)"
+          sleep 10

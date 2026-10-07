@@ -1,0 +1,54 @@
+name: wf-promote
+on:
+  workflow_call:
+    inputs:
+      image_repo:
+        required: true
+        type: string
+      target:
+        required: true
+        type: string
+      mode:
+        required: false
+        type: string
+        default: tag
+      source_tag:
+        required: false
+        type: string
+        default: ""
+    outputs:
+      skipped:
+        value: ${{ jobs.promote.outputs.skipped }}
+      source_tag:
+        value: ${{ jobs.promote.outputs.source_tag }}
+jobs:
+  promote:
+    name: Promote to ${{ inputs.target }}
+    runs-on: ubuntu-latest
+    outputs:
+      skipped: ${{ steps.guard.outputs.skipped }}
+      source_tag: ${{ steps.mv.outputs.source_tag }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Validate inputs
+        run: |
+          if [ '${{ inputs.mode }}' = tag ] && [ -z '${{ inputs.source_tag }}' ]; then echo "::error::source_tag is required in tag mode"; exit 1; fi
+      - name: Refuse to move the target backwards
+        id: guard
+        run: |
+          git fetch -q --tags origin
+          CUR=$(git rev-parse -q --verify "refs/tags/deployed/$GITHUB_REF_NAME/${{ inputs.target }}^{commit}" || true)
+          if [ -n "$CUR" ] && [ "$CUR" != "$GITHUB_SHA" ] && ! git merge-base --is-ancestor "$CUR" "$GITHUB_SHA"; then
+            echo "skipped=true" >> "$GITHUB_OUTPUT"; echo "::notice::deployed/$GITHUB_REF_NAME/${{ inputs.target }} is already ahead"; exit 0
+          fi
+      - name: Move the target tag
+        id: mv
+        if: steps.guard.outputs.skipped != 'true'
+        run: |
+          SRC='${{ inputs.source_tag }}'
+          if ! git rev-parse -q --verify "refs/tags/img/$SRC" >/dev/null; then echo "::error::image not found for $SRC"; exit 1; fi
+          git tag -f "deployed/$GITHUB_REF_NAME/${{ inputs.target }}" "$SRC" >/dev/null && git push -q -f origin "refs/tags/deployed/$GITHUB_REF_NAME/${{ inputs.target }}"
+          echo "source_tag=$SRC" >> "$GITHUB_OUTPUT"
+          echo "MQTAG|{\"env\":\"${{ inputs.target }}\",\"src\":\"${SRC:0:7}\",\"tip\":\"${GITHUB_SHA:0:7}\"}"

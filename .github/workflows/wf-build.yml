@@ -1,0 +1,21 @@
+name: wf-build
+on:
+  workflow_call:
+    inputs:
+      image_repo:
+        required: true
+        type: string
+jobs:
+  build:
+    name: build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build and publish the image (simulated, git tags stand for registry tags)
+        run: |
+          SHA='${{ github.event.pull_request.head.sha || github.sha }}'
+          if [ -e slow-if-bad.flag ] && ls qfail-*.flag >/dev/null 2>&1; then echo "slow builder"; sleep 170; else sleep 8; fi
+          BR=$(printf '%s' '${{ github.head_ref || github.ref_name }}' | LC_ALL=C sed 's/[^A-Za-z0-9_.-]/-/g' | cut -c1-120)
+          git tag "img/$SHA" && git push -q origin "refs/tags/img/$SHA"
+          git tag -f "br/$BR" "$SHA" && git push -q -f origin "refs/tags/br/$BR"
+          echo "MQIMG|{\"event\":\"$GITHUB_EVENT_NAME\",\"sha\":\"${SHA:0:7}\",\"branch_tag\":\"br/$BR\"}"

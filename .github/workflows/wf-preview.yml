@@ -1,0 +1,13 @@
+name: wf-preview
+on:
+  workflow_call:
+    inputs:
+      key:
+        required: true
+        type: string
+jobs:
+  update:
+    name: update
+    runs-on: ubuntu-latest
+    steps:
+      - run: echo "preview updated for $GITHUB_EVENT_NAME"

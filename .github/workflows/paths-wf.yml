@@ -1,0 +1,17 @@
+name: paths-wf
+
+on:
+  pull_request:
+    paths: ['apps/agent-portal/**']
+  merge_group:
+    paths: ['apps/agent-portal/**']
+
+permissions:
+  contents: read
+
+jobs:
+  p:
+    name: p
+    runs-on: ubuntu-latest
+    steps:
+      - run: echo hi

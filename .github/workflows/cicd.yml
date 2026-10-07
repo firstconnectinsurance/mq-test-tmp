@@ -1,0 +1,95 @@
+name: Service CI
+on:
+  push:
+    branches:
+      - s-PUSH5
+  pull_request:
+  merge_group:
+
+permissions:
+  contents: write
+  pull-requests: write
+
+concurrency:
+  group: svc-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name != 'push' }}
+
+jobs:
+  build:
+    name: Build
+    if: github.event_name != 'push'
+    uses: ./.github/workflows/wf-build.yml
+    with:
+      image_repo: ${{ vars.IMAGE_REPO || github.event.repository.name }}
+
+  preview:
+    name: Preview
+    needs: build
+    if: github.event_name == 'pull_request'
+    uses: ./.github/workflows/wf-preview.yml
+    with:
+      key: svc
+
+  check-a:
+    name: Check A
+    needs: build
+    uses: ./.github/workflows/wf-check.yml
+    with:
+      image_repo: ${{ vars.IMAGE_REPO || github.event.repository.name }}
+      command: a
+      job_name: Check A
+
+  check-b:
+    name: Check B
+    needs: build
+    uses: ./.github/workflows/wf-check.yml
+    with:
+      image_repo: ${{ vars.IMAGE_REPO || github.event.repository.name }}
+      command: b
+      job_name: Check B
+
+  promote-1:
+    name: Promote 1
+    needs: [build, check-a, check-b]
+    if: always() && github.event_name == 'push' && github.ref == 'refs/heads/s-PUSH5'
+    uses: ./.github/workflows/wf-promote.yml
+    with:
+      image_repo: ${{ vars.IMAGE_REPO || github.event.repository.name }}
+      target: env-1
+      mode: tag
+      source_tag: ${{ github.sha }}
+
+  promote-2:
+    name: Promote 2
+    needs: [build, check-a, check-b]
+    if: always() && github.event_name == 'push' && github.ref == 'refs/heads/s-PUSH5'
+    uses: ./.github/workflows/wf-promote.yml
+    with:
+      image_repo: ${{ vars.IMAGE_REPO || github.event.repository.name }}
+      target: env-2
+      mode: tag
+      source_tag: ${{ github.sha }}
+
+  promote-3:
+    name: Promote 3
+    needs: [build, check-a, check-b]
+    if: always() && github.event_name == 'push' && github.ref == 'refs/heads/s-PUSH5'
+    uses: ./.github/workflows/wf-promote.yml
+    with:
+      image_repo: ${{ vars.IMAGE_REPO || github.event.repository.name }}
+      target: env-3
+      mode: tag
+      source_tag: ${{ github.sha }}
+
+  result:
+    name: CI Result
+    needs: [build, check-a, check-b]
+    if: always() && github.event_name != 'push'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Evaluate
+        run: |
+          echo "build=${{ needs.build.result }} check-a=${{ needs.check-a.result }} check-b=${{ needs.check-b.result }}"
+          for r in "${{ needs.build.result }}" "${{ needs.check-a.result }}" "${{ needs.check-b.result }}"; do
+            if [ "$r" != "success" ]; then echo "::error::a required job did not succeed ($r)"; exit 1; fi
+          done

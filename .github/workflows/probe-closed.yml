@@ -1,0 +1,16 @@
+name: probe-closed
+
+on:
+  pull_request:
+    types: [closed]
+
+permissions:
+  contents: read
+
+jobs:
+  closed:
+    name: closed
+    runs-on: ubuntu-latest
+    steps:
+      - run: |
+          echo "MQCLOSED|pr=${{ github.event.pull_request.number }}|merged=${{ github.event.pull_request.merged }}|merged_by=${{ github.event.pull_request.merged_by.login }}|sender=${{ github.event.sender.login }}|merge_sha=${{ github.event.pull_request.merge_commit_sha }}|labeled=${{ contains(github.event.pull_request.labels.*.name, 'dynamic-env') }}|base=${{ github.event.pull_request.base.ref }}"

@@ -1,0 +1,70 @@
+name: probe-cache
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  merge_group:
+
+permissions:
+  contents: read
+
+jobs:
+  probe:
+    name: probe
+    runs-on: ubuntu-latest
+    steps:
+      - name: Identify
+        id: id
+        run: |
+          case "$GITHUB_EVENT_NAME" in
+            pull_request) N='${{ github.event.pull_request.number }}';;
+            merge_group)  N=$(basename "$GITHUB_REF" | sed -E 's/^pr-([0-9]+)-.*/\1/');;
+            *)            N=none;;
+          esac
+          echo "n=$N" >> "$GITHUB_OUTPUT"
+          mkdir -p probe-data
+          echo "$GITHUB_EVENT_NAME $N $GITHUB_REF" > probe-data/info.txt
+
+      - name: Look up the cache written by the default branch
+        id: a
+        uses: actions/cache/restore@v4
+        with:
+          path: probe-data
+          key: probe-default
+          lookup-only: true
+
+      - name: Look up the cache written by the pull_request run of this PR
+        id: b
+        uses: actions/cache/restore@v4
+        with:
+          path: probe-data
+          key: probe-pr-${{ steps.id.outputs.n }}
+          lookup-only: true
+
+      - name: Look up the cache written by an earlier queue run of this PR
+        id: c
+        uses: actions/cache/restore@v4
+        with:
+          path: probe-data
+          key: probe-mq-${{ steps.id.outputs.n }}
+          lookup-only: true
+
+      - name: Look up any cache written by another queue run (prefix)
+        id: d
+        uses: actions/cache/restore@v4
+        with:
+          path: probe-data
+          key: probe-mq-none
+          restore-keys: probe-mq-
+          lookup-only: true
+
+      - name: Report
+        run: |
+          echo "MQCACHE|event=$GITHUB_EVENT_NAME|n=${{ steps.id.outputs.n }}|default=${{ steps.a.outputs.cache-hit }}|pr_cache=${{ steps.b.outputs.cache-hit }}|mq_cache_same_pr=${{ steps.c.outputs.cache-hit }}|mq_prefix_match=${{ steps.d.outputs.cache-matched-key }}"
+
+      - name: Save the cache of this event
+        uses: actions/cache/save@v4
+        with:
+          path: probe-data
+          key: ${{ github.event_name == 'push' && 'probe-default' || (github.event_name == 'pull_request' && format('probe-pr-{0}', steps.id.outputs.n) || format('probe-mq-{0}', steps.id.outputs.n)) }}

@@ -1,0 +1,64 @@
+name: Carrier Admin CI/CD
+
+on:
+  pull_request:
+  merge_group:
+  push:
+    branches: ['s-MR*']
+
+permissions:
+  contents: read
+
+jobs:
+  changes:
+    name: changes
+    runs-on: ubuntu-latest
+    outputs:
+      run: ${{ steps.sel.outputs.run }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - id: sel
+        run: |
+          EV="$GITHUB_EVENT_NAME"
+          HEAD="$GITHUB_SHA"; BASE=""; TB=""; DIFF=""
+          case "$EV" in
+            pull_request)
+              BASE='${{ github.event.pull_request.base.sha }}'; HEAD='${{ github.event.pull_request.head.sha }}'
+              TB='${{ github.event.pull_request.base.ref }}'; DIFF="$BASE...$HEAD";;
+            merge_group)
+              BASE='${{ github.event.merge_group.base_sha }}'; HEAD='${{ github.event.merge_group.head_sha }}'
+              TB='${{ github.event.merge_group.base_ref }}'; TB="${TB#refs/heads/}"; DIFF="$BASE $HEAD";;
+            push)
+              BASE='${{ github.event.before }}'; TB="$GITHUB_REF_NAME"; DIFF="$BASE $HEAD";;
+          esac
+          git fetch -q origin '+refs/heads/*:refs/remotes/origin/*' || true
+          D_EVENT=$(git diff --name-only $DIFF 2>/dev/null | tr '\n' ' ' || true)
+          D_TRUNK=$(git diff --name-only "origin/$TB...$HEAD" 2>/dev/null | tr '\n' ' ' || true)
+          D_HEAD1=$(git diff --name-only "$HEAD^1" "$HEAD" 2>/dev/null | tr '\n' ' ' || true)
+          TIP=$(git rev-parse "origin/$TB" 2>/dev/null || echo none)
+          METHOD=$(cat diff-method.txt 2>/dev/null || echo event)
+          if [ "$METHOD" = trunk ]; then USED="$D_TRUNK"; else USED="$D_EVENT"; fi
+          if echo "$USED" | tr ' ' '\n' | grep -Eq '^(apps/carrier-admin/|packages/shared/)'; then RUN=true; else RUN=false; fi
+          echo "run=$RUN" >> "$GITHUB_OUTPUT"
+          echo "MQDIFF|{\"wf\":\"Carrier Admin\",\"event\":\"$EV\",\"base\":\"${BASE:0:7}\",\"head\":\"${HEAD:0:7}\",\"tip\":\"${TIP:0:7}\",\"d_event\":\"$D_EVENT\",\"d_trunk\":\"$D_TRUNK\",\"d_head1\":\"$D_HEAD1\",\"method\":\"$METHOD\",\"run\":\"$RUN\"}"
+
+  build:
+    name: build
+    needs: changes
+    if: needs.changes.outputs.run == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - run: |
+          if [ "$GITHUB_EVENT_NAME" = push ]; then sleep 15; else sleep 15; fi
+
+  result:
+    name: Carrier Admin CI Result
+    needs: [changes, build]
+    if: always()
+    runs-on: ubuntu-latest
+    steps:
+      - run: |
+          echo "changes=${{ needs.changes.result }} build=${{ needs.build.result }}"
+          [ "${{ needs.changes.result }}" = success ] && { [ "${{ needs.build.result }}" = success ] || [ "${{ needs.build.result }}" = skipped ]; }

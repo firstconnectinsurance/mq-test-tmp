@@ -1,0 +1,54 @@
+name: wf-promote
+on:
+  workflow_call:
+    inputs:
+      image_repo:
+        required: true
+        type: string
+      target:
+        required: true
+        type: string
+      mode:
+        required: false
+        type: string
+        default: tag
+      source_tag:
+        required: false
+        type: string
+        default: ""
+jobs:
+  promote:
+    name: Promote to ${{ inputs.target }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Promote the current tip
+        run: |
+          set -euo pipefail
+          BR="$GITHUB_REF_NAME"; TGT='${{ inputs.target }}'; TAG="deployed/$BR/$TGT"
+          for i in 1 2 3 4 5; do
+            git fetch -q --force --tags origin "+refs/heads/$BR:refs/remotes/origin/$BR"
+            TIP=$(git rev-parse "origin/$BR")
+            CUR=$(git rev-parse -q --verify "refs/tags/$TAG^{commit}" || true)
+            if [ "$CUR" = "$TIP" ]; then echo "already on the tip ${TIP:0:7}"; break; fi
+            if [ -n "$CUR" ] && ! git merge-base --is-ancestor "$CUR" "$TIP"; then echo "deployed ${CUR:0:7} is not behind the tip ${TIP:0:7}, nothing to do"; break; fi
+            git rev-parse -q --verify "refs/tags/img/$TIP" >/dev/null || { echo "::error::no image for the tip ${TIP:0:7}"; exit 1; }
+            has() { git cat-file -e "$TIP:$1" 2>/dev/null; }
+            if has fail-prod-once.flag && ! has delay-t2.txt && [ "$TGT" = env-3 ] && [ "$GITHUB_RUN_ATTEMPT" = 1 ]; then echo "::error::injected failure for $TGT"; exit 1; fi
+            D=2
+            has delay-t1.txt && D=60
+            has delay-t2.txt && D=40
+            has delay-t3.txt && D=2
+            echo "registry operation takes ${D}s"
+            sleep "$D"
+            git fetch -q --force --tags origin "+refs/heads/$BR:refs/remotes/origin/$BR"
+            NOW=$(git rev-parse "origin/$BR"); CUR2=$(git rev-parse -q --verify "refs/tags/$TAG^{commit}" || true)
+            if [ "$NOW" != "$TIP" ] || [ "$CUR2" != "$CUR" ]; then echo "state changed while waiting, evaluating again"; continue; fi
+            git tag -f "$TAG" "$TIP" >/dev/null && git push -q -f origin "refs/tags/$TAG"
+            echo "MQTAG|{\"env\":\"$TGT\",\"tip\":\"${TIP:0:7}\",\"round\":$i}"
+          done
+          git fetch -q --force --tags origin "+refs/heads/$BR:refs/remotes/origin/$BR"
+          TIP=$(git rev-parse "origin/$BR"); CUR=$(git rev-parse -q --verify "refs/tags/$TAG^{commit}" || true)
+          if [ "$CUR" != "$TIP" ] && ! git merge-base --is-ancestor "$TIP" "$CUR" 2>/dev/null; then echo "::error::$TGT is on ${CUR:0:7}, the tip is ${TIP:0:7}"; exit 1; fi

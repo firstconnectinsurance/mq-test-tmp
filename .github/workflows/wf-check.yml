@@ -1,0 +1,20 @@
+name: wf-check
+on:
+  workflow_call:
+    inputs:
+      image_repo:
+        required: true
+        type: string
+      command:
+        required: true
+        type: string
+      job_name:
+        required: false
+        type: string
+        default: ""
+jobs:
+  run:
+    name: ${{ inputs.job_name || inputs.command }}
+    runs-on: ubuntu-latest
+    steps:
+      - run: sleep 6

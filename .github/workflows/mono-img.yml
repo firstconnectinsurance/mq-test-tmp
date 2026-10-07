@@ -1,0 +1,114 @@
+name: mono-img
+
+on:
+  pull_request:
+  merge_group:
+  push:
+    branches: ['s-MT*']
+
+permissions:
+  contents: write
+  pull-requests: read
+
+jobs:
+  changes:
+    name: changes
+    runs-on: ubuntu-latest
+    outputs:
+      a1: ${{ steps.s.outputs.a1 }}
+      a2: ${{ steps.s.outputs.a2 }}
+      a3: ${{ steps.s.outputs.a3 }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - id: s
+        run: |
+          EV="$GITHUB_EVENT_NAME"; DIFF=""
+          case "$EV" in
+            pull_request) DIFF="${{ github.event.pull_request.base.sha }}...${{ github.event.pull_request.head.sha }}";;
+            merge_group)  DIFF="${{ github.event.merge_group.base_sha }} ${{ github.event.merge_group.head_sha }}";;
+            push)         DIFF="${{ github.event.before }} $GITHUB_SHA";;
+          esac
+          D=$(git diff --name-only $DIFF 2>/dev/null || true)
+          for n in 1 2 3; do
+            if echo "$D" | grep -Eq "^(apps/app-$n/|packages/shared/)"; then echo "a$n=true" >> "$GITHUB_OUTPUT"; else echo "a$n=false" >> "$GITHUB_OUTPUT"; fi
+          done
+
+  build-a1:
+    needs: changes
+    if: needs.changes.outputs.a1 == 'true' && github.event_name != 'push'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: |
+          sleep 4
+          if [ "$GITHUB_EVENT_NAME" = merge_group ]; then git tag "img/app-1/$GITHUB_SHA" && git push -q origin "img/app-1/$GITHUB_SHA"; fi
+  build-a2:
+    needs: changes
+    if: needs.changes.outputs.a2 == 'true' && github.event_name != 'push'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: |
+          sleep 4
+          if [ "$GITHUB_EVENT_NAME" = merge_group ]; then git tag "img/app-2/$GITHUB_SHA" && git push -q origin "img/app-2/$GITHUB_SHA"; fi
+  build-a3:
+    needs: changes
+    if: needs.changes.outputs.a3 == 'true' && github.event_name != 'push'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: |
+          sleep 4
+          if [ "$GITHUB_EVENT_NAME" = merge_group ]; then git tag "img/app-3/$GITHUB_SHA" && git push -q origin "img/app-3/$GITHUB_SHA"; fi
+
+  result:
+    name: result
+    needs: [changes, build-a1, build-a2, build-a3]
+    if: always() && github.event_name != 'push'
+    runs-on: ubuntu-latest
+    steps:
+      - run: |
+          [ "${{ needs.changes.result }}" = success ]
+          for r in "${{ needs.build-a1.result }}" "${{ needs.build-a2.result }}" "${{ needs.build-a3.result }}"; do [ "$r" = success ] || [ "$r" = skipped ] || exit 1; done
+
+  promote:
+    name: promote
+    if: github.event_name == 'push' && github.event.before != '0000000000000000000000000000000000000000'
+    runs-on: ubuntu-latest
+    concurrency:
+      group: promote-${{ github.ref }}
+      cancel-in-progress: false
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Promote the image of every app that changed
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -uo pipefail
+          BEFORE='${{ github.event.before }}'
+          git fetch -q --tags origin
+          for n in 1 2 3; do
+            PATHS="apps/app-$n packages/shared"
+            # 1. start from what is deployed now (self-healing if an earlier push run was cancelled); first run: the push's "before"
+            CUR=$(git rev-parse -q --verify "refs/tags/deployed/MT5/app-$n^{commit}" || true)
+            BASE=${CUR:-$BEFORE}
+            if [ -n "$CUR" ] && ! git merge-base --is-ancestor "$CUR" "$GITHUB_SHA"; then echo "app-$n: deployed commit is not an ancestor of the tip, not touching it"; continue; fi
+            # 2. last trunk commit (first-parent) in the range that touched this app or the shared packages
+            LAST=$(git log --first-parent -1 --format=%H "$BASE..$GITHUB_SHA" -- $PATHS)
+            [ -z "$LAST" ] && { echo "app-$n: nothing new"; continue; }
+            # 3. resolve to the commit the image was built for (the queue entry head): the PR's merge_commit_sha works for merge, squash and rebase
+            SRC=$(gh api "repos/$GITHUB_REPOSITORY/commits/$LAST/pulls" --jq '.[0].merge_commit_sha' 2>/dev/null || true)
+            [ -z "$SRC" ] && SRC=$LAST
+            # 4. the image must exist, otherwise this push needs the fallback (full build), never a silent skip
+            if ! git rev-parse -q --verify "refs/tags/img/app-$n/$SRC" >/dev/null; then
+              echo "MQTAG|{\"app\":\"app-$n\",\"result\":\"NO_IMAGE\",\"last\":\"${LAST:0:7}\",\"src\":\"${SRC:0:7}\",\"tip\":\"${GITHUB_SHA:0:7}\"}"
+              echo "::error::no image for app-$n at ${SRC:0:7}: fallback build needed"; continue
+            fi
+            # 5. promote (here: move the "deployed" tag; in real life: re-tag the image in ECR)
+            git tag -f "deployed/MT5/app-$n" "$SRC" >/dev/null && git push -q -f origin "refs/tags/deployed/MT5/app-$n"
+            echo "MQTAG|{\"app\":\"app-$n\",\"result\":\"PROMOTED\",\"last\":\"${LAST:0:7}\",\"src\":\"${SRC:0:7}\",\"tip\":\"${GITHUB_SHA:0:7}\",\"range_from\":\"${BASE:0:7}\"}"
+          done

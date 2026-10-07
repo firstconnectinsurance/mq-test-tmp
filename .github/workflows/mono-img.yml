@@ -1,0 +1,98 @@
+name: mono-img
+
+on:
+  pull_request:
+  merge_group:
+  push:
+    branches: ['s-MI*']
+
+permissions:
+  contents: write
+  pull-requests: read
+
+jobs:
+  changes:
+    name: changes
+    runs-on: ubuntu-latest
+    outputs:
+      a1: ${{ steps.s.outputs.a1 }}
+      a2: ${{ steps.s.outputs.a2 }}
+      a3: ${{ steps.s.outputs.a3 }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - id: s
+        run: |
+          EV="$GITHUB_EVENT_NAME"; DIFF=""
+          case "$EV" in
+            pull_request) DIFF="${{ github.event.pull_request.base.sha }}...${{ github.event.pull_request.head.sha }}";;
+            merge_group)  DIFF="${{ github.event.merge_group.base_sha }} ${{ github.event.merge_group.head_sha }}";;
+            push)         DIFF="${{ github.event.before }} $GITHUB_SHA";;
+          esac
+          D=$(git diff --name-only $DIFF 2>/dev/null || true)
+          for n in 1 2 3; do
+            if echo "$D" | grep -Eq "^(apps/app-$n/|packages/shared/)"; then echo "a$n=true" >> "$GITHUB_OUTPUT"; else echo "a$n=false" >> "$GITHUB_OUTPUT"; fi
+          done
+
+  build-a1:
+    needs: changes
+    if: needs.changes.outputs.a1 == 'true' && github.event_name != 'push'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: |
+          sleep 15
+          if [ "$GITHUB_EVENT_NAME" = merge_group ]; then git tag "img/app-1/$GITHUB_SHA" && git push -q origin "img/app-1/$GITHUB_SHA"; fi
+  build-a2:
+    needs: changes
+    if: needs.changes.outputs.a2 == 'true' && github.event_name != 'push'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: |
+          sleep 15
+          if [ "$GITHUB_EVENT_NAME" = merge_group ]; then git tag "img/app-2/$GITHUB_SHA" && git push -q origin "img/app-2/$GITHUB_SHA"; fi
+  build-a3:
+    needs: changes
+    if: needs.changes.outputs.a3 == 'true' && github.event_name != 'push'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: |
+          sleep 15
+          if [ "$GITHUB_EVENT_NAME" = merge_group ]; then git tag "img/app-3/$GITHUB_SHA" && git push -q origin "img/app-3/$GITHUB_SHA"; fi
+
+  result:
+    name: result
+    needs: [changes, build-a1, build-a2, build-a3]
+    if: always() && github.event_name != 'push'
+    runs-on: ubuntu-latest
+    steps:
+      - run: |
+          [ "${{ needs.changes.result }}" = success ]
+          for r in "${{ needs.build-a1.result }}" "${{ needs.build-a2.result }}" "${{ needs.build-a3.result }}"; do [ "$r" = success ] || [ "$r" = skipped ] || exit 1; done
+
+  promote:
+    name: promote
+    if: github.event_name == 'push' && github.event.before != '0000000000000000000000000000000000000000'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          BEFORE='${{ github.event.before }}'
+          git fetch -q --tags origin
+          for n in 1 2 3; do
+            P="apps/app-$n packages/shared"
+            CHANGED=$(git diff --name-only "$BEFORE" "$GITHUB_SHA" -- $P | wc -l | tr -d ' ')
+            SRC=$(git log --first-parent -1 --format=%H "$BEFORE..$GITHUB_SHA" -- $P || true)
+            AT_TIP=0; git rev-parse -q --verify "refs/tags/img/app-$n/$GITHUB_SHA" >/dev/null && AT_TIP=1
+            AT_SRC=0; [ -n "$SRC" ] && git rev-parse -q --verify "refs/tags/img/app-$n/$SRC" >/dev/null && AT_SRC=1
+            PRSHA=""; [ -n "$SRC" ] && PRSHA=$(gh api "repos/$GITHUB_REPOSITORY/commits/$SRC/pulls" --jq '.[0].merge_commit_sha' 2>/dev/null || true)
+            AT_PR=0; [ -n "$PRSHA" ] && git rev-parse -q --verify "refs/tags/img/app-$n/$PRSHA" >/dev/null && AT_PR=1
+            echo "MQIMG|{\"app\":\"app-$n\",\"tip\":\"${GITHUB_SHA:0:7}\",\"src\":\"${SRC:0:7}\",\"pr_sha\":\"${PRSHA:0:7}\",\"changed_files\":$CHANGED,\"image_at_tip\":$AT_TIP,\"image_at_src\":$AT_SRC,\"image_at_pr\":$AT_PR}"
+          done

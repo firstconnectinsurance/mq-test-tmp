@@ -1,0 +1,31 @@
+name: wf-check
+on:
+  workflow_call:
+    inputs:
+      image_repo:
+        required: true
+        type: string
+      command:
+        required: true
+        type: string
+      job_name:
+        required: false
+        type: string
+        default: ""
+jobs:
+  run:
+    name: ${{ inputs.job_name || inputs.command }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Checks
+        run: |
+          sleep 6
+          if [ "$GITHUB_EVENT_NAME" = merge_group ]; then
+            msg=$(git log -1 --format=%s)
+            for f in qfail-*.flag; do
+              [ -e "$f" ] || continue
+              b="${f#qfail-}"; b="${b%.flag}"
+              case "$msg" in */"$b") echo "entry-specific failure for $b"; exit 1;; esac
+            done
+          fi

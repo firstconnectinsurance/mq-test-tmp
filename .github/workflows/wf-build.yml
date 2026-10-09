@@ -1,0 +1,19 @@
+name: wf-build
+on:
+  workflow_call:
+    inputs:
+      image_repo:
+        required: true
+        type: string
+jobs:
+  build:
+    name: build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build and publish the image (simulated, a git tag stands for the registry tag)
+        run: |
+          SHA='${{ github.event.pull_request.head.sha || github.sha }}'
+          sleep 30
+          git tag "img/$SHA" && git push -q origin "refs/tags/img/$SHA"
+          echo "image img/$SHA created for event $GITHUB_EVENT_NAME"

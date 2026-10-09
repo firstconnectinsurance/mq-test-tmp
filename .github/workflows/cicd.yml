@@ -1,0 +1,127 @@
+name: Service CI
+on:
+  push:
+    branches:
+      - s-FAST1
+  pull_request:
+  merge_group:
+
+permissions:
+  contents: write
+  pull-requests: read
+
+concurrency:
+  group: svc-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name != 'push' }}
+
+jobs:
+  gate:
+    name: Gate
+    if: github.event_name == 'merge_group'
+    runs-on: ubuntu-latest
+    outputs:
+      fresh: ${{ steps.g.outputs.fresh }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Is the queue commit identical to what the PR already built and tested
+        id: g
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          N=$(basename "$GITHUB_REF" | sed -E 's/^pr-([0-9]+)-.*/\1/')
+          HEAD=$(gh api "repos/$GITHUB_REPOSITORY/pulls/$N" --jq .head.sha)
+          GT=$(git rev-parse 'HEAD^{tree}')
+          PT=$(gh api "repos/$GITHUB_REPOSITORY/commits/$HEAD" --jq .commit.tree.sha)
+          FRESH=false
+          if [ "$GT" = "$PT" ] && [ -n "$(git ls-remote --tags origin "refs/tags/img/$HEAD")" ]; then FRESH=true; fi
+          echo "fresh=$FRESH" >> "$GITHUB_OUTPUT"
+          BASEB=$(echo '${{ github.event.merge_group.base_ref }}' | sed 's#^refs/heads/##')
+          git tag -f "gate/$BASEB/pr-$N/$FRESH" "$GITHUB_SHA" && git push -q -f origin "refs/tags/gate/$BASEB/pr-$N/$FRESH"
+          echo "MQFRESH|pr=$N|fresh=$FRESH|group_tree=${GT:0:7}|pr_head_tree=${PT:0:7}"
+
+  build:
+    name: Build
+    needs: gate
+    if: ${{ !cancelled() && (github.event_name == 'pull_request' || (github.event_name == 'merge_group' && needs.gate.outputs.fresh != 'true')) }}
+    uses: ./.github/workflows/wf-build.yml
+    with:
+      image_repo: ${{ vars.IMAGE_REPO || github.event.repository.name }}
+
+  retag:
+    name: Retag
+    needs: gate
+    if: ${{ !cancelled() && github.event_name == 'merge_group' && needs.gate.outputs.fresh == 'true' }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Give the already built image the tag of the commit that lands (metadata only)
+        run: |
+          git tag "img/$GITHUB_SHA" "$GITHUB_SHA" && git push -q origin "refs/tags/img/$GITHUB_SHA"
+          echo "MQRETAG|sha=${GITHUB_SHA:0:7}"
+
+  check-a:
+    name: Check A
+    needs: build
+    if: ${{ !cancelled() && needs.build.result == 'success' }}
+    uses: ./.github/workflows/wf-check.yml
+    with:
+      image_repo: ${{ vars.IMAGE_REPO || github.event.repository.name }}
+      command: a
+      job_name: Check A
+
+  check-b:
+    name: Check B
+    needs: build
+    if: ${{ !cancelled() && needs.build.result == 'success' }}
+    uses: ./.github/workflows/wf-check.yml
+    with:
+      image_repo: ${{ vars.IMAGE_REPO || github.event.repository.name }}
+      command: b
+      job_name: Check B
+
+  result:
+    name: CI Result
+    needs: [gate, build, retag, check-a, check-b]
+    if: always() && github.event_name != 'push'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Evaluate
+        run: |
+          echo "event=$GITHUB_EVENT_NAME fresh='${{ needs.gate.outputs.fresh }}' build=${{ needs.build.result }} retag=${{ needs.retag.result }} a=${{ needs.check-a.result }} b=${{ needs.check-b.result }}"
+          if [ "$GITHUB_EVENT_NAME" = merge_group ] && [ '${{ needs.gate.outputs.fresh }}' = true ]; then
+            [ '${{ needs.retag.result }}' = success ] || { echo "::error::retag did not succeed"; exit 1; }
+          else
+            for r in '${{ needs.build.result }}' '${{ needs.check-a.result }}' '${{ needs.check-b.result }}'; do
+              if [ "$r" != success ]; then echo "::error::a required job did not succeed ($r)"; exit 1; fi
+            done
+          fi
+
+  promote-1:
+    name: Promote 1
+    if: github.event_name == 'push' && github.ref == 'refs/heads/s-FAST1'
+    uses: ./.github/workflows/wf-promote.yml
+    with:
+      image_repo: ${{ vars.IMAGE_REPO || github.event.repository.name }}
+      target: env-1
+      mode: tag
+      source_tag: ${{ github.sha }}
+
+  promote-2:
+    name: Promote 2
+    if: github.event_name == 'push' && github.ref == 'refs/heads/s-FAST1'
+    uses: ./.github/workflows/wf-promote.yml
+    with:
+      image_repo: ${{ vars.IMAGE_REPO || github.event.repository.name }}
+      target: env-2
+      mode: tag
+      source_tag: ${{ github.sha }}
+
+  promote-3:
+    name: Promote 3
+    if: github.event_name == 'push' && github.ref == 'refs/heads/s-FAST1'
+    uses: ./.github/workflows/wf-promote.yml
+    with:
+      image_repo: ${{ vars.IMAGE_REPO || github.event.repository.name }}
+      target: env-3
+      mode: tag
+      source_tag: ${{ github.sha }}

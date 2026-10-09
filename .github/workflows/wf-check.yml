@@ -1,0 +1,23 @@
+name: wf-check
+on:
+  workflow_call:
+    inputs:
+      image_repo:
+        required: true
+        type: string
+      command:
+        required: true
+        type: string
+      job_name:
+        required: false
+        type: string
+        default: ""
+jobs:
+  run:
+    name: ${{ inputs.job_name || inputs.command }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: |
+          sleep 6
+          if [ "$GITHUB_EVENT_NAME" = merge_group ] && ls qbad-*.flag >/dev/null 2>&1; then echo "tree-wide failure (qbad flag in the tree)"; exit 1; fi

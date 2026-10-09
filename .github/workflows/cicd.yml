@@ -1,0 +1,77 @@
+name: Service CI
+on:
+  pull_request:
+  merge_group:
+
+permissions:
+  contents: write
+  pull-requests: write
+
+concurrency:
+  group: svc-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name != 'push' }}
+
+jobs:
+  build:
+    name: Build
+    uses: ./.github/workflows/wf-build.yml
+    with:
+      image_repo: ${{ vars.IMAGE_REPO || github.event.repository.name }}
+
+  check-a:
+    name: Check A
+    needs: build
+    uses: ./.github/workflows/wf-check.yml
+    with:
+      image_repo: ${{ vars.IMAGE_REPO || github.event.repository.name }}
+      command: a
+      job_name: Check A
+
+  check-b:
+    name: Check B
+    needs: build
+    uses: ./.github/workflows/wf-check.yml
+    with:
+      image_repo: ${{ vars.IMAGE_REPO || github.event.repository.name }}
+      command: b
+      job_name: Check B
+
+  result:
+    name: CI Result
+    needs: [build, check-a, check-b]
+    if: always()
+    runs-on: ubuntu-latest
+    steps:
+      - name: Evaluate
+        run: |
+          for r in '${{ needs.build.result }}' '${{ needs.check-a.result }}' '${{ needs.check-b.result }}'; do
+            if [ "$r" != success ]; then echo "::error::a required job did not succeed ($r)"; exit 1; fi
+          done
+
+  notify:
+    name: Notify
+    needs: [result]
+    if: ${{ always() && github.event_name == 'merge_group' && needs.result.result == 'failure' }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Tell the author, but only when the PR really left the queue
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          N=$(basename "$GITHUB_REF" | sed -E 's/^pr-([0-9]+)-.*/\1/')
+          BASEB=$(echo '${{ github.event.merge_group.base_ref }}' | sed 's#^refs/heads/##')
+          # a failed run does not always mean the PR is out: when an entry ahead was the cause, GitHub rebuilds this one.
+          # Give the queue a moment to react, then look at what actually happened to the PR.
+          sleep 40
+          OWNER="${GITHUB_REPOSITORY%/*}"; NAME="${GITHUB_REPOSITORY#*/}"
+          Q=$(gh api graphql -f query='query($o:String!,$r:String!,$n:Int!){repository(owner:$o,name:$r){pullRequest(number:$n){state mergedAt mergeQueueEntry{state}}}}' -f o="$OWNER" -f r="$NAME" -F n="$N" --jq '.data.repository.pullRequest | "\(.state)|\(.mergedAt // "")|\(.mergeQueueEntry.state // "none")"')
+          STATE="${Q%%|*}"; ENTRY="${Q##*|}"
+          echo "MQNOTIFY|pr=$N|state=$STATE|entry=$ENTRY"
+          if [ "$STATE" = OPEN ] && [ "$ENTRY" = none ]; then
+            DEC=sent
+            gh pr comment "$N" --body "This pull request was removed from the merge queue because its checks failed: ${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}. Fix it and add it to the queue again."
+          else
+            DEC=skipped
+          fi
+          git tag -f "notify/$BASEB/pr-$N/$DEC-$GITHUB_RUN_ID" "$GITHUB_SHA" && git push -q -f origin "refs/tags/notify/$BASEB/pr-$N/$DEC-$GITHUB_RUN_ID"

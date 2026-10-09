@@ -1,0 +1,25 @@
+name: Service CI
+on:
+  pull_request:
+  merge_group:
+
+permissions:
+  contents: read
+
+jobs:
+  result:
+    name: CI Result
+    runs-on: ubuntu-latest
+    steps:
+      - name: Show the contexts (no personal data)
+        run: |
+          echo "MQCTX|event=$GITHUB_EVENT_NAME|ref=$GITHUB_REF|ref_name=$GITHUB_REF_NAME|head_ref=[$GITHUB_HEAD_REF]|base_ref=[$GITHUB_BASE_REF]|sha=$GITHUB_SHA"
+          if [ "$GITHUB_EVENT_NAME" = merge_group ]; then
+            echo "MQCTX|event_keys=$(jq -c 'keys' "$GITHUB_EVENT_PATH")"
+            echo "MQCTX|merge_group_keys=$(jq -c '.merge_group|keys' "$GITHUB_EVENT_PATH")"
+            echo "MQCTX|head_commit_keys=$(jq -c '.merge_group.head_commit|keys' "$GITHUB_EVENT_PATH")"
+            echo "MQCTX|merge_group.head_ref=$(jq -r '.merge_group.head_ref' "$GITHUB_EVENT_PATH")"
+            echo "MQCTX|merge_group.base_ref=$(jq -r '.merge_group.base_ref' "$GITHUB_EVENT_PATH")"
+            echo "MQCTX|head_commit.message=$(jq -c '.merge_group.head_commit.message' "$GITHUB_EVENT_PATH")"
+          fi
+          sleep 5

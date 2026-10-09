@@ -1,0 +1,24 @@
+name: Service CI
+on:
+  pull_request:
+  merge_group:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.event_name == 'merge_group' && format('queue-{0}', github.event.merge_group.head_commit.message) || format('svc-{0}', github.ref) }}
+  cancel-in-progress: ${{ github.event_name != 'push' }}
+
+jobs:
+  result:
+    name: CI Result
+    runs-on: ubuntu-latest
+    steps:
+      - name: Show the queue commit message (no personal data)
+        run: |
+          if [ "$GITHUB_EVENT_NAME" = merge_group ]; then
+            echo "MQMSG|length=$(jq -r '.merge_group.head_commit.message|length' "$GITHUB_EVENT_PATH")|lines=$(jq -r '.merge_group.head_commit.message|split("\\n")|length' "$GITHUB_EVENT_PATH")"
+            echo "MQMSG|text=$(jq -c '.merge_group.head_commit.message' "$GITHUB_EVENT_PATH")"
+          fi
+          sleep 5

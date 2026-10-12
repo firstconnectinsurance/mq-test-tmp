@@ -1,0 +1,63 @@
+name: Service CI
+on:
+  push:
+    branches:
+      - s-SLOW2
+  pull_request:
+  merge_group:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: svc-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name != 'push' }}
+
+jobs:
+  build:
+    name: Build
+    if: github.event_name != 'push'
+    uses: ./.github/workflows/wf-build.yml
+    with:
+      image_repo: ${{ vars.IMAGE_REPO || github.event.repository.name }}
+
+  check-a:
+    name: Check A
+    needs: build
+    if: ${{ !cancelled() && needs.build.result == 'success' }}
+    uses: ./.github/workflows/wf-check.yml
+    with:
+      image_repo: ${{ vars.IMAGE_REPO || github.event.repository.name }}
+      command: a
+      job_name: Check A
+
+  check-b:
+    name: Check B
+    needs: build
+    if: ${{ !cancelled() && needs.build.result == 'success' }}
+    uses: ./.github/workflows/wf-check.yml
+    with:
+      image_repo: ${{ vars.IMAGE_REPO || github.event.repository.name }}
+      command: b
+      job_name: Check B
+
+  result:
+    name: CI Result
+    needs: [build, check-a, check-b]
+    if: always() && github.event_name != 'push'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Evaluate
+        run: |
+          for r in '${{ needs.build.result }}' '${{ needs.check-a.result }}' '${{ needs.check-b.result }}'; do
+            if [ "$r" != success ]; then echo "::error::a required job did not succeed ($r)"; exit 1; fi
+          done
+
+  landed:
+    name: Landed
+    if: github.event_name == 'push'
+    runs-on: ubuntu-latest
+    steps:
+      - run: |
+          echo "MQLANDED|sha=${GITHUB_SHA:0:7}"
+          sleep 3
